@@ -2,6 +2,10 @@
 
 A simple desktop application built with Electron and React designed to streamline the process of gathering and consolidating code context from local project files. It allows developers to quickly select relevant files and folders, preview the combined content, and copy it for use in AI prompts, documentation, or code sharing.
 
+<p align="center">
+  <img src="assets/demo2.gif" alt="Planned Demo" width="600"/>
+</p>
+
 ## Features
 
 - **Project Selection:** Easily select project folders.
