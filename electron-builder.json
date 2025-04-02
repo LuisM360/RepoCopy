@@ -1,0 +1,14 @@
+{
+  "productName": "RepoCopy",
+  "appId": "com.repocopy.app",
+  "files": ["dist-electron", "dist-react"],
+  "extraResources": ["dist-electron/preload.cjs"],
+  "icon": "src/ui/assets/icon.png",
+  "mac": {
+    "target": ["dmg"]
+  },
+
+  "win": {
+    "target": ["portable", "msi"]
+  }
+}
