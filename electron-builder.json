@@ -3,7 +3,7 @@
   "appId": "com.repocopy.app",
   "files": ["dist-electron", "dist-react"],
   "extraResources": ["dist-electron/preload.cjs"],
-  "icon": "src/ui/assets/icon.png",
+  "icon": "src/ui/assets/repocopyicon.png",
   "mac": {
     "target": ["dmg"]
   },
