@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react"; // Import useEffect
+import { useState, useEffect, useMemo } from "react"; // Import useEffect and useMemo
+import { get_encoding } from "tiktoken"; // Import tiktoken's get_encoding
 import { Button } from "@/components/ui/button";
 import { Code, FolderOpen, Settings, Circle } from "lucide-react";
 import { ProjectFileExplorer } from "./ProjectFileExplorer"; // Fix import name
@@ -54,13 +55,44 @@ export function RepoCopyApp() {
   const [isLoadingTree, setIsLoadingTree] = useState<boolean>(false); // Renamed for clarity
   const [error, setError] = useState<string | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  // State for tiktoken encoder
+  const [encoder, setEncoder] = useState<ReturnType<
+    typeof get_encoding
+  > | null>(null); // Let type be inferred
   // State for preview pane
-  const [previewContent, setPreviewContent] = useState<string>("");
+  const [concatenatedContent, setConcatenatedContent] = useState<string>(""); // Renamed state
   const [isPreviewLoading, setIsPreviewLoading] = useState<boolean>(false);
-  // State for total size
+  const [isPreviewMode, setIsPreviewMode] = useState<boolean>(false); // State for preview toggle
+  // State for total size and tokens
   const [totalSelectedSize, setTotalSelectedSize] = useState<number>(0);
+  const [tokenCounts, setTokenCounts] = useState<Map<string, number>>(
+    new Map()
+  ); // State for individual token counts
+  const [totalTokenCount, setTotalTokenCount] = useState<number>(0); // State for total token count
 
   const electronAPI = window.electronAPI;
+
+  // --- Tiktoken Initialization Effect ---
+  useEffect(() => {
+    try {
+      const enc = get_encoding("cl100k_base"); // Use get_encoding
+      setEncoder(enc);
+      console.log("Tiktoken encoder initialized.");
+    } catch (err) {
+      console.error("Failed to initialize tiktoken encoder:", err);
+      setError("Failed to initialize tokenizer.");
+    }
+
+    // Cleanup function
+    return () => {
+      if (encoder) {
+        encoder.free();
+        console.log("Tiktoken encoder freed.");
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Run only on mount
+  // --- End Tiktoken Initialization ---
 
   const handleSelectProject = async () => {
     setError(null);
@@ -68,8 +100,10 @@ export function RepoCopyApp() {
     setFileTree(null);
     setSelectedPath(null);
     setSelectedPaths(new Set());
-    setPreviewContent(""); // Clear preview on new project selection
+    setConcatenatedContent(""); // Clear preview on new project selection
     setTotalSelectedSize(0); // Reset size
+    setTokenCounts(new Map()); // Reset token counts
+    setTotalTokenCount(0); // Reset total tokens
     console.log("Requesting directory selection...");
     try {
       const path = await electronAPI.openDirectoryDialog();
@@ -103,21 +137,26 @@ export function RepoCopyApp() {
     console.log("Selected paths updated:", newSelection);
   };
 
-  // Effect to fetch content when selection changes
+  // Effect to fetch content and calculate tokens when selection changes
   useEffect(() => {
-    const fetchContent = async () => {
-      if (selectedPaths.size === 0) {
-        setPreviewContent("");
+    const fetchContentAndTokens = async () => {
+      if (selectedPaths.size === 0 || !encoder) {
+        // Also check if encoder is ready
+        setConcatenatedContent("");
         setTotalSelectedSize(0); // Reset size if selection is empty
+        setTokenCounts(new Map()); // Reset token counts
+        setTotalTokenCount(0); // Reset total tokens
         setIsPreviewLoading(false);
         return;
       }
 
       setIsPreviewLoading(true);
-      setPreviewContent(""); // Clear previous content
+      setConcatenatedContent(""); // Clear previous content
       setError(null); // Clear previous errors specific to fetching
 
       let accumulatedSize = 0;
+      let accumulatedTokenCount = 0; // Initialize token accumulator
+      const newTokenCounts = new Map<string, number>(); // Initialize new map for this run
       const contentPromises = Array.from(selectedPaths).map(async (path) => {
         try {
           // Find node to get size (if available)
@@ -128,38 +167,68 @@ export function RepoCopyApp() {
 
           const content = await electronAPI.getFileContent(path);
           if (content !== null) {
+            // Calculate tokens
+            const tokens = encoder.encode(content);
+            newTokenCounts.set(path, tokens.length);
+            accumulatedTokenCount += tokens.length;
+
             // Use relative path for separator if possible, otherwise full path
             const separatorPath = selectedPath
               ? path.replace(selectedPath + "\\", "")
               : path; // Basic relative path
-            return `// --- ${separatorPath} ---\n\n${content}`;
+            return {
+              path,
+              content: `// --- ${separatorPath} ---\n\n${content}`,
+            }; // Return object with path and content
           } else {
-            return `// --- Error reading file: ${path} ---`;
+            return { path, content: `// --- Error reading file: ${path} ---` };
           }
         } catch (err) {
           console.error(`Error fetching content for ${path}:`, err);
-          return `// --- Exception reading file: ${path} ---`;
+          return {
+            path,
+            content: `// --- Exception reading file: ${path} ---`,
+          };
         }
       });
 
       try {
         const results = await Promise.all(contentPromises);
-        setPreviewContent(results.join("\n\n"));
+        setConcatenatedContent(results.map((r) => r.content).join("\n\n")); // Join only the content part
         setTotalSelectedSize(accumulatedSize);
+        setTokenCounts(newTokenCounts); // Update token counts map state
+        setTotalTokenCount(accumulatedTokenCount); // Update total token count state
       } catch (err) {
         console.error("Error processing file contents:", err);
         setError("An error occurred while processing file contents.");
-        setPreviewContent("// --- Error loading preview ---");
+        setConcatenatedContent("// --- Error loading preview ---");
         setTotalSelectedSize(0);
+        setTokenCounts(new Map());
+        setTotalTokenCount(0);
       } finally {
         setIsPreviewLoading(false);
       }
     };
 
-    fetchContent();
-  }, [selectedPaths, electronAPI, fileTree, selectedPath]); // Add dependencies
+    fetchContentAndTokens();
+  }, [selectedPaths, electronAPI, fileTree, selectedPath, encoder]); // Add encoder to dependencies
 
   const formattedSize = formatBytes(totalSelectedSize);
+
+  // --- Derived State for Selected Entries ---
+  const selectedEntries = useMemo(() => {
+    if (!fileTree) return [];
+    return Array.from(selectedPaths)
+      .map((path) => findNodeByPath(fileTree, path)) // Assuming findNodeByPath exists
+      .filter(
+        (node): node is FileSystemEntry => node !== null && node.type === "file"
+      );
+  }, [selectedPaths, fileTree]);
+  // --- End Derived State ---
+
+  // --- Event Handlers ---
+  const handleTogglePreview = () => setIsPreviewMode((prev) => !prev);
+  // --- End Event Handlers ---
 
   return (
     <div className="flex flex-col h-screen bg-gray-100 text-gray-800">
@@ -219,7 +288,11 @@ export function RepoCopyApp() {
         {/* Preview Pane */}
         <PreviewPane
           className="w-2/3" // Apply width here
-          content={previewContent}
+          concatenatedContent={concatenatedContent} // Pass concatenated content
+          selectedEntries={selectedEntries} // Pass the derived entries
+          tokenCounts={tokenCounts} // Pass the token map
+          isPreviewMode={isPreviewMode} // Pass the toggle state
+          onTogglePreview={handleTogglePreview} // Pass the toggle handler
           isLoading={isPreviewLoading}
         />
       </main>
@@ -229,6 +302,10 @@ export function RepoCopyApp() {
         <div className="flex items-center space-x-4">
           <span>{selectedPaths.size} files selected</span>
           <span>Total size: {formattedSize}</span>
+          <span className="ml-4">
+            Total tokens: {totalTokenCount.toLocaleString()}
+          </span>{" "}
+          {/* Display total tokens */}
         </div>
         <div className="flex items-center space-x-2">
           <Circle
