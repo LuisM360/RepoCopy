@@ -31,9 +31,4 @@ dist-electron
 .env.development.local
 .env.test.local
 .env.production.local
-PLAN.md
-README_PLAN.md
-refactorNaming.md
-documentationPlan.md
-tiktoken_integration_plan.md
 docs
